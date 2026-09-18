@@ -14,7 +14,7 @@ class DownstreamCall(BaseModel):
 class CanonicalMetricSnapshot(BaseModel):
     """
     The normalized internal telemetry format consumed by the RootCause AI reasoning engine.
-    Every external source (Prometheus, OTel, Akshit's microservices, custom JSON)
+    Every external source (Prometheus, OTel, target microservices, custom JSON)
     is converted into this representation by the TelemetryAdapter.
     """
     service_id: str = Field(..., description="Unique service identifier (e.g. 'orders-service')")
