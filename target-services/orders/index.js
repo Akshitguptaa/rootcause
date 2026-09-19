@@ -5,6 +5,29 @@ app.use(express.json())
 const INVENTORY_URL = process.env.INVENTORY_URL || 'http://localhost:8082'
 const PAYMENT_URL = process.env.PAYMENT_URL || 'http://localhost:8083'
 
+let chaos = { enabled: false, latency_ms: 0, error_rate: 0 }
+
+app.use((req, res, next) => {
+  if (req.path.startsWith('/_') || req.path === '/health') return next()
+  if (!chaos.enabled) return next()
+  setTimeout(() => {
+    if (Math.random() < chaos.error_rate) {
+      return res.status(500).json({ error: 'chaos-induced failure' })
+    }
+    next()
+  }, chaos.latency_ms)
+})
+
+app.post('/_chaos', (req, res) => {
+  chaos = { ...chaos, ...req.body }
+  res.json({ applied: chaos })
+})
+
+app.delete('/_chaos', (req, res) => {
+  chaos = { enabled: false, latency_ms: 0, error_rate: 0 }
+  res.json({ cleared: true })
+})
+
 async function fetchWithRetry(url, opts = {}) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {

@@ -5,6 +5,29 @@ app.use(express.json())
 let poolActive = 0
 const POOL_MAX = 5
 
+let chaos = { enabled: false, latency_ms: 0, error_rate: 0 }
+
+app.use((req, res, next) => {
+  if (req.path.startsWith('/_') || req.path === '/health') return next()
+  if (!chaos.enabled) return next()
+  setTimeout(() => {
+    if (Math.random() < chaos.error_rate) {
+      return res.status(500).json({ error: 'chaos-induced failure' })
+    }
+    next()
+  }, chaos.latency_ms)
+})
+
+app.post('/_chaos', (req, res) => {
+  chaos = { ...chaos, ...req.body }
+  res.json({ applied: chaos })
+})
+
+app.delete('/_chaos', (req, res) => {
+  chaos = { enabled: false, latency_ms: 0, error_rate: 0 }
+  res.json({ cleared: true })
+})
+
 async function withPool(fn) {
   while (poolActive >= POOL_MAX) {
     await new Promise(r => setTimeout(r, 50))
