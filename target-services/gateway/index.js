@@ -3,6 +3,7 @@ const app = express()
 app.use(express.json())
 
 const ORDERS_URL = process.env.ORDERS_URL || 'http://localhost:8081'
+const tracker = require('../lib/tracker')('gateway')
 
 let chaos = { enabled: false, latency_ms: 0, error_rate: 0 }
 
@@ -27,15 +28,28 @@ app.delete('/_chaos', (req, res) => {
   res.json({ cleared: true })
 })
 
+app.get('/_metrics', (req, res) => res.json(tracker.snapshot()))
+
 app.get('/order', async (req, res) => {
+  const start = Date.now()
   try {
     const r = await fetch(`${ORDERS_URL}/order`, {
       signal: AbortSignal.timeout(5000)
     })
-    if (!r.ok) return res.status(r.status).json({ error: 'orders returned ' + r.status })
+    const elapsed = Date.now() - start
+    if (!r.ok) {
+      tracker.record(elapsed, false)
+      tracker.recordDownstream('orders', elapsed, true)
+      return res.status(r.status).json({ error: 'orders returned ' + r.status })
+    }
     const data = await r.json()
+    tracker.record(elapsed, true)
+    tracker.recordDownstream('orders', elapsed, false)
     res.json({ source: 'gateway', ...data })
   } catch (e) {
+    const elapsed = Date.now() - start
+    tracker.record(elapsed, false)
+    tracker.recordDownstream('orders', elapsed, true)
     res.status(502).json({ error: 'orders unreachable', detail: e.message })
   }
 })

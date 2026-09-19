@@ -4,6 +4,7 @@ app.use(express.json())
 
 const INVENTORY_URL = process.env.INVENTORY_URL || 'http://localhost:8082'
 const PAYMENT_URL = process.env.PAYMENT_URL || 'http://localhost:8083'
+const tracker = require('../lib/tracker')('orders')
 
 let chaos = { enabled: false, latency_ms: 0, error_rate: 0 }
 
@@ -28,26 +29,40 @@ app.delete('/_chaos', (req, res) => {
   res.json({ cleared: true })
 })
 
-async function fetchWithRetry(url, opts = {}) {
+app.get('/_metrics', (req, res) => res.json(tracker.snapshot()))
+
+async function fetchWithRetry(url, target, opts = {}) {
   for (let attempt = 0; attempt < 3; attempt++) {
+    const start = Date.now()
     try {
       const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(3000) })
-      if (r.ok) return r
+      const elapsed = Date.now() - start
+      if (r.ok) {
+        tracker.recordDownstream(target, elapsed, false)
+        return r
+      }
+      tracker.recordDownstream(target, elapsed, true)
     } catch (e) {
+      const elapsed = Date.now() - start
+      tracker.recordDownstream(target, elapsed, true)
       if (attempt === 2) throw e
+      tracker.recordRetry()
     }
   }
   throw new Error('all retries exhausted for ' + url)
 }
 
 app.get('/order', async (req, res) => {
+  const start = Date.now()
   try {
     const [inv, pay] = await Promise.all([
-      fetchWithRetry(`${INVENTORY_URL}/check`).then(r => r.json()),
-      fetchWithRetry(`${PAYMENT_URL}/charge`).then(r => r.json())
+      fetchWithRetry(`${INVENTORY_URL}/check`, 'inventory').then(r => r.json()),
+      fetchWithRetry(`${PAYMENT_URL}/charge`, 'payment').then(r => r.json())
     ])
+    tracker.record(Date.now() - start, true)
     res.json({ source: 'orders', inventory: inv, payment: pay })
   } catch (e) {
+    tracker.record(Date.now() - start, false)
     res.status(502).json({ error: 'downstream call failed', detail: e.message })
   }
 })

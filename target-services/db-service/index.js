@@ -2,6 +2,8 @@ const express = require('express')
 const app = express()
 app.use(express.json())
 
+const tracker = require('../lib/tracker')('db-service')
+
 let poolActive = 0
 const POOL_MAX = 5
 
@@ -28,21 +30,30 @@ app.delete('/_chaos', (req, res) => {
   res.json({ cleared: true })
 })
 
+app.get('/_metrics', (req, res) => {
+  tracker.setPool(poolActive, POOL_MAX)
+  res.json(tracker.snapshot())
+})
+
 async function withPool(fn) {
   while (poolActive >= POOL_MAX) {
     await new Promise(r => setTimeout(r, 50))
   }
   poolActive++
+  tracker.setPool(poolActive, POOL_MAX)
   try {
     return await fn()
   } finally {
     poolActive--
+    tracker.setPool(poolActive, POOL_MAX)
   }
 }
 
 app.get('/query', async (req, res) => {
+  const start = Date.now()
   await withPool(async () => {
     await new Promise(r => setTimeout(r, 5 + Math.random() * 10))
+    tracker.record(Date.now() - start, true)
     res.json({
       source: 'db-service',
       rows: [{ id: 1, item: 'widget', qty: 100 }, { id: 2, item: 'gadget', qty: 47 }]
@@ -51,8 +62,10 @@ app.get('/query', async (req, res) => {
 })
 
 app.post('/write', async (req, res) => {
+  const start = Date.now()
   await withPool(async () => {
     await new Promise(r => setTimeout(r, 8 + Math.random() * 12))
+    tracker.record(Date.now() - start, true)
     res.json({ source: 'db-service', written: true, id: Date.now() })
   })
 })
