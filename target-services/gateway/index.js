@@ -6,7 +6,9 @@ const ORDERS_URL = process.env.ORDERS_URL || 'http://localhost:8081'
 
 app.get('/order', async (req, res) => {
   try {
-    const r = await fetch(`${ORDERS_URL}/order`)
+    const r = await fetch(`${ORDERS_URL}/order`, {
+      signal: AbortSignal.timeout(5000)
+    })
     if (!r.ok) return res.status(r.status).json({ error: 'orders returned ' + r.status })
     const data = await r.json()
     res.json({ source: 'gateway', ...data })
