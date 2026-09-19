@@ -1,0 +1,50 @@
+version: "3.8"
+
+services:
+  gateway:
+    build: .
+    command: node gateway/index.js
+    ports:
+      - "8080:8080"
+    environment:
+      - ORDERS_URL=http://orders:8081
+    depends_on:
+      - orders
+
+  orders:
+    build: .
+    command: node orders/index.js
+    ports:
+      - "8081:8081"
+    environment:
+      - INVENTORY_URL=http://inventory:8082
+      - PAYMENT_URL=http://payment:8083
+    depends_on:
+      - inventory
+      - payment
+
+  inventory:
+    build: .
+    command: node inventory/index.js
+    ports:
+      - "8082:8082"
+    environment:
+      - DB_URL=http://db-service:8084
+    depends_on:
+      - db-service
+
+  payment:
+    build: .
+    command: node payment/index.js
+    ports:
+      - "8083:8083"
+    environment:
+      - DB_URL=http://db-service:8084
+    depends_on:
+      - db-service
+
+  db-service:
+    build: .
+    command: node db-service/index.js
+    ports:
+      - "8084:8084"
