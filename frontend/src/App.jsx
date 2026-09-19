@@ -70,6 +70,7 @@ export default function App() {
   const [metricsHistory, setMetricsHistory] = useState({});
 
   const [panelWidth, setPanelWidth] = useState(380);
+  const [runHistory, setRunHistory] = useState([]);
 
   const [chaosInjections, setChaosInjections] = useState({});
   const [selectedNodeId, setSelectedNodeId] = useState(null);
@@ -247,6 +248,8 @@ export default function App() {
       }));
     };
 
+    let currentReport = null;
+
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
@@ -262,6 +265,7 @@ export default function App() {
           const root = data.root_cause_service;
           const blast = data.blast_radius || [];
           setReport(data);
+          currentReport = data;
           setRootCauseId(root);
           setBlastRadiusIds(blast);
           setShowDrawer(true);
@@ -269,6 +273,15 @@ export default function App() {
         } else if (event_type === 'COMPLETED') {
           setIsRunning(false);
           ws.close();
+          if (currentReport) {
+            setRunHistory(prev => [...prev, {
+              id: Date.now(),
+              timestamp: new Date().toISOString(),
+              mode: mode,
+              root_cause: currentReport.root_cause_service,
+              confidence: currentReport.confidence_score,
+            }]);
+          }
         }
       } catch (err) {
         console.error('WS error:', err);
@@ -304,6 +317,20 @@ export default function App() {
     }
     setCausalPath(path.reverse());
   };
+
+  const handleApplyFix = useCallback(async (serviceId) => {
+    const port = SERVICE_PORTS[serviceId];
+    if (!port) return;
+    try {
+      await fetch(`/fix/${port}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+      });
+    } catch (e) {
+      console.error(`Fix apply failed on ${serviceId}:`, e);
+    }
+  }, []);
 
   // ── Panel Resizing ──
   const startDrag = useCallback((e) => {
@@ -352,6 +379,7 @@ export default function App() {
         mode={mode} setMode={setMode}
         concurrency={concurrency} setConcurrency={setConcurrency}
         duration={duration} setDuration={setDuration}
+        runHistory={runHistory}
       >
         <ChaosChipBar
           selectedNode={selectedNodeId}
@@ -390,6 +418,12 @@ export default function App() {
               const db = currentMetrics['db-service'] || {};
               return (
                 <>
+                  <span className="px-2 py-0.5 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>degraded </span>
+                    <span style={{ fontWeight: 600, color: blastRadiusIds.length > 0 ? 'var(--health-warn)' : 'var(--text-primary)' }}>
+                      {blastRadiusIds.length}/5
+                    </span>
+                  </span>
                   <span className="px-2 py-0.5 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
                     <span style={{ color: 'var(--text-muted)' }}>rps </span>
                     <span style={{ fontWeight: 600 }}>{(gw.throughput_rps || 0).toFixed(0)}</span>
@@ -445,6 +479,8 @@ export default function App() {
           report={report}
           onHighlightService={(svcId) => setSelectedNodeId(svcId)}
           onDismiss={() => setShowDrawer(false)}
+          onApplyFix={handleApplyFix}
+          onRerun={startExperiment}
         />
       )}
     </div>

@@ -21,6 +21,12 @@ export default defineConfig({
       '/chaos/8082': { target: 'http://localhost:8082', changeOrigin: true, rewrite: (p) => p.replace('/chaos/8082', '/_chaos') },
       '/chaos/8083': { target: 'http://localhost:8083', changeOrigin: true, rewrite: (p) => p.replace('/chaos/8083', '/_chaos') },
       '/chaos/8084': { target: 'http://localhost:8084', changeOrigin: true, rewrite: (p) => p.replace('/chaos/8084', '/_chaos') },
+      // Proxy fix commands
+      '/fix/8080': { target: 'http://localhost:8080', changeOrigin: true, rewrite: (p) => p.replace('/fix/8080', '/_fix') },
+      '/fix/8081': { target: 'http://localhost:8081', changeOrigin: true, rewrite: (p) => p.replace('/fix/8081', '/_fix') },
+      '/fix/8082': { target: 'http://localhost:8082', changeOrigin: true, rewrite: (p) => p.replace('/fix/8082', '/_fix') },
+      '/fix/8083': { target: 'http://localhost:8083', changeOrigin: true, rewrite: (p) => p.replace('/fix/8083', '/_fix') },
+      '/fix/8084': { target: 'http://localhost:8084', changeOrigin: true, rewrite: (p) => p.replace('/fix/8084', '/_fix') },
     }
   }
 })

@@ -8,6 +8,7 @@ let poolActive = 0
 const POOL_MAX = 5
 
 let chaos = { enabled: false, latency_ms: 0, error_rate: 0 }
+let fixApplied = false
 
 // Chaos is applied inside withPool so it holds a connection
 app.use((req, res, next) => {
@@ -22,6 +23,11 @@ app.post('/_chaos', (req, res) => {
 app.delete('/_chaos', (req, res) => {
   chaos = { enabled: false, latency_ms: 0, error_rate: 0 }
   res.json({ cleared: true })
+})
+
+app.post('/_fix', (req, res) => {
+  fixApplied = req.body.enabled !== false
+  res.json({ fixApplied })
 })
 
 app.get('/_metrics', (req, res) => {
@@ -51,7 +57,9 @@ app.get('/query', async (req, res) => {
         if (Math.random() < chaos.error_rate) throw new Error('chaos-induced failure')
         if (chaos.latency_ms > 0) await new Promise(r => setTimeout(r, chaos.latency_ms))
       }
-      await new Promise(r => setTimeout(r, 5 + Math.random() * 10))
+      
+      const baseLatency = fixApplied ? 1 : (5 + Math.random() * 10)
+      await new Promise(r => setTimeout(r, baseLatency))
       tracker.record(Date.now() - start, true)
       res.json({
         source: 'db-service',
@@ -72,7 +80,9 @@ app.post('/write', async (req, res) => {
         if (Math.random() < chaos.error_rate) throw new Error('chaos-induced failure')
         if (chaos.latency_ms > 0) await new Promise(r => setTimeout(r, chaos.latency_ms))
       }
-      await new Promise(r => setTimeout(r, 8 + Math.random() * 12))
+      
+      const baseLatency = fixApplied ? 2 : (8 + Math.random() * 12)
+      await new Promise(r => setTimeout(r, baseLatency))
       tracker.record(Date.now() - start, true)
       res.json({ source: 'db-service', written: true, id: Date.now() })
     })

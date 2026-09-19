@@ -11,8 +11,11 @@ export default function Header({
   setConcurrency,
   duration,
   setDuration,
+  runHistory = [],
   children,
 }) {
+  const [showHistory, setShowHistory] = React.useState(false);
+
   return (
     <header className="h-14 border-b flex items-center justify-between px-5 z-20"
       style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-surface)' }}>
@@ -126,6 +129,62 @@ export default function Header({
             Run experiment
           </button>
         )}
+
+        {/* History Dropdown */}
+        <div className="relative">
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md transition cursor-pointer"
+            style={{
+              background: 'var(--bg-raised)',
+              border: '1px solid var(--border-subtle)',
+              color: 'var(--text-secondary)',
+              fontFamily: 'var(--font-ui)',
+              fontSize: '12px',
+            }}
+          >
+            History {runHistory.length > 0 && `(${runHistory.length})`}
+          </button>
+
+          {showHistory && (
+            <div className="absolute right-0 top-full mt-2 w-72 rounded-md shadow-lg z-50 overflow-hidden"
+              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+              <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                <h3 style={{ fontFamily: 'var(--font-ui)', fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                  Past Runs
+                </h3>
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                {runHistory.length === 0 ? (
+                  <div className="px-4 py-6 text-center" style={{ fontFamily: 'var(--font-data)', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    No experiments run yet.
+                  </div>
+                ) : (
+                  runHistory.map((run, idx) => (
+                    <div key={run.id} className="px-3 py-2 border-b last:border-b-0 hover:bg-[rgba(255,255,255,0.02)]" style={{ borderColor: 'var(--border-subtle)' }}>
+                      <div className="flex justify-between items-center mb-1">
+                        <span style={{ fontFamily: 'var(--font-ui)', fontSize: '11px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                          {run.mode === 'live' ? 'Live' : run.mode === 'sim_cascade' ? 'Cascade' : 'Retry Storm'}
+                        </span>
+                        <span style={{ fontFamily: 'var(--font-data)', fontSize: '10px', color: 'var(--text-muted)' }}>
+                          {new Date(run.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span style={{ fontFamily: 'var(--font-data)', fontSize: '11px', color: 'var(--health-crit)' }}>
+                          root: {run.root_cause}
+                        </span>
+                        <span style={{ fontFamily: 'var(--font-data)', fontSize: '10px', color: 'var(--agent-blue)' }}>
+                          {Math.round(run.confidence * 100)}% conf
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

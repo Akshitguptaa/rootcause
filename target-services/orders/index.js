@@ -7,6 +7,7 @@ const PAYMENT_URL = process.env.PAYMENT_URL || 'http://localhost:8083'
 const tracker = require('../lib/tracker')('orders')
 
 let chaos = { enabled: false, latency_ms: 0, error_rate: 0 }
+let fixApplied = false
 
 app.use((req, res, next) => {
   if (req.path.startsWith('/_') || req.path === '/health') return next()
@@ -29,6 +30,11 @@ app.delete('/_chaos', (req, res) => {
   res.json({ cleared: true })
 })
 
+app.post('/_fix', (req, res) => {
+  fixApplied = req.body.enabled !== false
+  res.json({ fixApplied })
+})
+
 app.get('/_metrics', (req, res) => res.json(tracker.snapshot()))
 
 async function fetchWithRetry(url, target, opts = {}) {
@@ -47,6 +53,9 @@ async function fetchWithRetry(url, target, opts = {}) {
       tracker.recordDownstream(target, elapsed, true)
       if (attempt === 2) throw e
       tracker.recordRetry()
+      if (fixApplied) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 200))
+      }
     }
   }
   throw new Error('all retries exhausted for ' + url)
