@@ -110,31 +110,35 @@ export default function App() {
       causalPairs.push([causalPath[i], causalPath[i + 1]]);
     }
 
-    const flowNodes = topology.nodes.map((n, i) => {
-      const pos = POSITIONS[n.id] || { x: 100 + i * 180, y: 100 };
-      const m = metricsRef.current[n.id] || {};
-      return {
-        id: n.id,
-        type: 'serviceNode',
-        position: pos,
-        data: {
+    setNodes((prevNodes) => {
+      const prevMap = new Map((prevNodes || []).map((n) => [n.id, n]));
+      return topology.nodes.map((n, i) => {
+        const prevNode = prevMap.get(n.id);
+        const pos = prevNode?.position || POSITIONS[n.id] || { x: 100 + i * 180, y: 100 };
+        const m = currentMetrics[n.id] || metricsRef.current[n.id] || {};
+        return {
           id: n.id,
-          display_name: n.display_name || n.id,
-          role: n.role,
-          host_port: n.host_port,
-          metrics: m,
-          isRootCause: rootCauseId === n.id,
-          isBlastRadius: blastRadiusIds.includes(n.id),
-          isCausalPath: causalPairs.some(([s, t]) => s === n.id || t === n.id),
-          isSelected: selectedNodeId === n.id,
-          chaosActive: chaosInjections[n.id] || null,
-          onClick: (nodeId) => setSelectedNodeId((prev) => prev === nodeId ? null : nodeId),
-        },
-      };
+          type: 'serviceNode',
+          position: pos,
+          data: {
+            id: n.id,
+            display_name: n.display_name || n.id,
+            role: n.role,
+            host_port: n.host_port,
+            metrics: m,
+            isRootCause: rootCauseId === n.id,
+            isBlastRadius: blastRadiusIds.includes(n.id),
+            isCausalPath: causalPairs.some(([s, t]) => s === n.id || t === n.id),
+            isSelected: selectedNodeId === n.id,
+            chaosActive: chaosInjections[n.id] || null,
+            onClick: (nodeId) => setSelectedNodeId((prev) => (prev === nodeId ? null : nodeId)),
+          },
+        };
+      });
     });
 
     const flowEdges = topology.edges.map((e, idx) => {
-      const tm = metricsRef.current[e.target] || {};
+      const tm = currentMetrics[e.target] || metricsRef.current[e.target] || {};
       const isStressed = (tm.latency_p99_ms ?? 0) > 400 || (tm.pool_active ?? 0) >= (tm.pool_max ?? 999);
       const isCausal = causalPairs.some(([s, t]) => s === e.source && t === e.target);
       const isRoot = rootCauseId === e.target;
@@ -149,7 +153,7 @@ export default function App() {
         source: e.source,
         target: e.target,
         type: 'causal',
-        animated: isCausal,
+        animated: isCausal || isStressed,
         data: { isCausal, isStressed, isRootCause: isRoot },
         style: { stroke: strokeColor, strokeWidth: isCausal ? 2.5 : isStressed ? 1.8 : 1.2 },
         markerEnd: {
@@ -161,9 +165,8 @@ export default function App() {
       };
     });
 
-    setNodes(flowNodes);
     setEdges(flowEdges);
-  }, [topology, selectedNodeId, chaosInjections, rootCauseId, blastRadiusIds, causalPath]);
+  }, [topology, currentMetrics, selectedNodeId, chaosInjections, rootCauseId, blastRadiusIds, causalPath]);
 
   useEffect(() => { buildGraph(); }, [buildGraph]);
 
@@ -363,7 +366,7 @@ export default function App() {
           display_name: n.display_name || n.id,
           role: n.role,
           host_port: n.host_port,
-          metrics: currentMetrics[n.id] || metricsRef.current[n.id] || {},
+          metrics: currentMetrics[n.id] || {},
         };
       })()
     : null;

@@ -13,11 +13,19 @@ if backend_dir not in sys.path:
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+try:
+    import pytest
+except ImportError:
+    pytest = None
+
 from app.services.topology_parser import DockerComposeParser
 from app.models.orchestrator import ExperimentPlan, StressPattern
 from app.services.orchestrator import ExperimentOrchestrator
 
 
+mark_anyio = pytest.mark.anyio if pytest else lambda f: f
+
+@mark_anyio
 async def test_live_microservices_stress():
     compose_path = Path(__file__).resolve().parent.parent.parent / "target-services" / "docker-compose.yml"
     parser = DockerComposeParser()
@@ -30,6 +38,18 @@ async def test_live_microservices_stress():
     print(f"Ingress Entrypoint: {topology.entrypoint_ids}")
     print(f"Shared Bottleneck Candidates: {topology.shared_bottleneck_ids}")
     print(f"Dependency Edges: {[(e.source, e.target) for e in topology.edges]}")
+
+    # Check if target services are running before executing live stress
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            resp = await client.get("http://localhost:8080/_metrics")
+            if resp.status_code != 200:
+                if pytest:
+                    pytest.skip("Target services returned non-200. Start with npm start --prefix target-services")
+    except Exception:
+        if pytest:
+            pytest.skip("Target services not running on localhost:8080. Start with npm start --prefix target-services")
 
     print("\n" + "=" * 65)
     print(" 2. INITIATING TARGETED STRESS EXPERIMENT")
