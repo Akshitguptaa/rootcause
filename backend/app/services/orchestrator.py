@@ -176,6 +176,8 @@ class ExperimentOrchestrator:
                 timestamp=time.time(),
                 data={"token": token}
             )
+            # Smooth paced streaming so reasoning tokens emerge at realistic typing speed
+            await asyncio.sleep(0.025)
 
         full_thought = "".join(full_thought_buffer)
         report = self.engine._extract_diagnosis_json(full_thought)
