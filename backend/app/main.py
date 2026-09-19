@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import json
 import logging
+import httpx
 from typing import Dict, Any, Optional
 from contextlib import asynccontextmanager
 
@@ -52,6 +53,41 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SERVICE_PORT_MAP = {str(p): f"http://localhost:{p}" for p in range(8080, 8085)}
+
+
+async def _proxy(method: str, port: str, path: str, body=None):
+    base_url = SERVICE_PORT_MAP.get(port)
+    if not base_url:
+        raise HTTPException(status_code=404, detail=f"unknown port: {port}")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            if method == "POST":
+                resp = await client.post(f"{base_url}/{path}", json=body)
+            else:
+                resp = await client.delete(f"{base_url}/{path}")
+            return resp.json()
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail=f"service on :{port} unreachable")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/chaos/{port}")
+async def chaos_inject(port: str, body: Dict[str, Any]):
+    return await _proxy("POST", port, "_chaos", body)
+
+
+@app.delete("/api/chaos/{port}")
+async def chaos_clear(port: str):
+    return await _proxy("DELETE", port, "_chaos")
+
+
+@app.post("/api/fix/{port}")
+async def fix_apply(port: str, body: Dict[str, Any]):
+    return await _proxy("POST", port, "_fix", body)
+
 
 
 class ParseTopologyRequest(BaseModel):

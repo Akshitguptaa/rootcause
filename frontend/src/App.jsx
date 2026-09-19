@@ -170,30 +170,39 @@ export default function App() {
 
   useEffect(() => { buildGraph(); }, [buildGraph]);
 
-  // ── Chaos injection via proxy ──
+
   const handleInject = useCallback(async (serviceId, injectType) => {
     const port = SERVICE_PORTS[serviceId];
     if (!port) return;
 
-    try {
-      const res = await fetch(`/chaos/${port}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(injectType.chaos),
-      });
-      if (res.ok) {
-        setChaosInjections((prev) => ({ ...prev, [serviceId]: injectType.chaos }));
+    setChaosInjections((prev) => {
+      const currentChaos = prev[serviceId];
+      const isActive = currentChaos?.latency_ms === injectType.chaos.latency_ms &&
+                       currentChaos?.error_rate === injectType.chaos.error_rate;
+
+      if (isActive) {
+        // Toggle OFF
+        fetch(`/api/chaos/${port}`, { method: 'DELETE' }).catch((e) => console.error(e));
+        const next = { ...prev };
+        delete next[serviceId];
+        return next;
+      } else {
+        // Toggle ON
+        fetch(`/api/chaos/${port}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(injectType.chaos),
+        }).catch((e) => console.error(e));
+        return { ...prev, [serviceId]: injectType.chaos };
       }
-    } catch (e) {
-      console.error(`Chaos inject failed on ${serviceId}:`, e);
-    }
+    });
   }, []);
 
   const clearAllChaos = useCallback(async () => {
     const promises = Object.keys(chaosInjections).map(async (svcId) => {
       const port = SERVICE_PORTS[svcId];
       if (port) {
-        try { await fetch(`/chaos/${port}`, { method: 'DELETE' }); } catch (e) { /* ignore */ }
+        try { await fetch(`/api/chaos/${port}`, { method: 'DELETE' }); } catch (e) { /* ignore */ }
       }
     });
     await Promise.all(promises);
@@ -325,10 +334,16 @@ export default function App() {
     const port = SERVICE_PORTS[serviceId];
     if (!port) return;
     try {
-      await fetch(`/fix/${port}`, {
+      await fetch(`/api/fix/${port}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: true }),
+      });
+      await fetch(`/api/chaos/${port}`, { method: 'DELETE' }).catch(() => {});
+      setChaosInjections(prev => {
+        const next = { ...prev };
+        delete next[serviceId];
+        return next;
       });
     } catch (e) {
       console.error(`Fix apply failed on ${serviceId}:`, e);
