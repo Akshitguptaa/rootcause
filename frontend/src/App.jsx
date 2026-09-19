@@ -461,18 +461,18 @@ export default function App() {
             <div className="w-0.5 h-full mx-auto bg-transparent group-hover:bg-[#5e5a56] transition-colors" />
           </div>
 
-          {selectedNodeId && selectedNodeData ? (
+          {selectedNodeId && selectedNodeData && (
             <InspectPanel
               node={selectedNodeData}
               metricsHistory={metricsHistory}
               chaosState={chaosInjections[selectedNodeId] || null}
               onClose={() => setSelectedNodeId(null)}
             />
-          ) : (
-            <div className="flex-1 p-3 overflow-hidden">
-              <AgentTerminal thoughts={thoughts} isRunning={isRunning} completed={Boolean(report)} />
-            </div>
           )}
+
+          <div className={`flex-1 p-3 overflow-hidden ${selectedNodeId && selectedNodeData ? 'hidden' : 'flex flex-col'}`}>
+            <AgentTerminal thoughts={thoughts} isRunning={isRunning} completed={Boolean(report)} />
+          </div>
         </div>
       </div>
 

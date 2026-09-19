@@ -24,11 +24,11 @@ function renderInline(text) {
 }
 
 export default function AgentTerminal({ thoughts, rawThoughts, isRunning, completed }) {
-  const [displayedText, setDisplayedText] = useState('');
-  const queueRef = useRef('');
-  const terminalRef = useRef(null);
-
   const incoming = thoughts || rawThoughts || '';
+  const cleanInitial = (completed || !isRunning) && incoming ? incoming.replace(/```(?:json)?[\s\S]*$/i, '').trimEnd() : '';
+  const [displayedText, setDisplayedText] = useState(cleanInitial);
+  const queueRef = useRef(cleanInitial);
+  const terminalRef = useRef(null);
 
   useEffect(() => {
     const cleanRaw = (incoming || '').replace(/```(?:json)?[\s\S]*$/i, '').trimEnd();
