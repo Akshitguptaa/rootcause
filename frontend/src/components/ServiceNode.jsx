@@ -1,6 +1,30 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { Server, Database, Shield, Zap, AlertTriangle, CheckCircle, Flame } from 'lucide-react';
+import { Server, Database, Shield, Zap } from 'lucide-react';
+
+function Waveform({ value = 0, healthy = true, width = 52, height = 16 }) {
+  const points = useMemo(() => {
+    const pts = [];
+    const n = 10;
+    for (let i = 0; i <= n; i++) {
+      const x = (i / n) * width;
+      const amp = healthy ? height * 0.2 : height * 0.45;
+      const freq = healthy ? 0.7 : 2.5;
+      const noise = healthy ? 0 : (Math.sin(i * 3.1 + value * 0.01) * 0.3);
+      const y = height / 2 + Math.sin(i * freq + Date.now() * 0.0008) * amp + noise * height * 0.2;
+      pts.push(`${x},${Math.max(1, Math.min(height - 1, y))}`);
+    }
+    return pts.join(' ');
+  }, [value, healthy, width, height]);
+
+  const color = !healthy ? (value > 800 ? 'var(--health-crit)' : 'var(--health-warn)') : 'var(--health-ok)';
+
+  return (
+    <svg width={width} height={height} style={{ opacity: 0.7 }}>
+      <polyline points={points} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" />
+    </svg>
+  );
+}
 
 export default function ServiceNode({ data }) {
   const {
@@ -11,102 +35,124 @@ export default function ServiceNode({ data }) {
     metrics = {},
     isRootCause = false,
     isBlastRadius = false,
-    status = 'healthy', // 'healthy', 'warning', 'critical'
+    isCausalPath = false,
+    isSelected = false,
+    chaosActive = null,
+    onClick,
   } = data;
 
-  const rps = metrics.throughput_rps ?? 0;
   const p99 = metrics.latency_p99_ms ?? 0;
+  const rps = metrics.throughput_rps ?? 0;
   const errorRate = metrics.error_rate ?? 0;
   const poolActive = metrics.pool_active ?? null;
   const poolMax = metrics.pool_max ?? null;
-  const poolSaturation = metrics.pool_saturation ?? (poolMax ? poolActive / poolMax : 0);
   const retries = metrics.retries_per_sec ?? 0;
 
-  // Determine visual styling based on status
-  let ringClass = 'border-slate-800 bg-slate-900/80 hover:border-slate-700';
-  let badgeBg = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+  const isHealthy = p99 < 300 && errorRate < 0.05;
+  const isCritical = p99 > 800 || errorRate > 0.15;
 
-  if (isRootCause) {
-    ringClass = 'border-rose-500/90 bg-rose-950/40 shadow-[0_0_30px_rgba(244,63,94,0.35)]';
-    badgeBg = 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse';
-  } else if (isBlastRadius || status === 'critical') {
-    ringClass = 'border-amber-500/80 bg-amber-950/30 shadow-[0_0_20px_rgba(245,158,11,0.25)]';
-    badgeBg = 'bg-amber-500/20 text-amber-300 border-amber-500/40';
-  } else if (status === 'warning' || p99 > 400 || poolSaturation > 0.7) {
-    ringClass = 'border-yellow-500/60 bg-yellow-950/20';
-    badgeBg = 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30';
-  }
+  const isDb = id.toLowerCase().includes('db');
+  const isGateway = role === 'ingress';
 
-  const isDb = id.toLowerCase().includes('db') || id.toLowerCase().includes('data');
-  const isGateway = role === 'ingress' || id.toLowerCase().includes('gateway');
+  // Border color: functional meaning only
+  let borderColor = 'var(--border-medium)';
+  if (isRootCause) borderColor = 'var(--health-crit)';
+  else if (isCausalPath) borderColor = 'var(--causal-indigo)';
+  else if (isBlastRadius || isCritical) borderColor = 'var(--health-warn)';
+  else if (isSelected) borderColor = 'var(--text-secondary)';
+
+  const sickClass = (chaosActive || isCritical) ? 'node-sick' : '';
 
   return (
-    <div className={`relative w-64 rounded-xl border p-3.5 backdrop-blur-md transition-all duration-300 ${ringClass}`}>
-      <Handle type="target" position={Position.Top} className="!bg-sky-400" />
+    <div
+      className={`relative rounded-lg cursor-pointer transition-all duration-200 ${sickClass} ${chaosActive ? 'inject-active' : ''}`}
+      style={{
+        width: 220,
+        background: 'var(--bg-surface)',
+        border: `1.5px solid ${borderColor}`,
+        padding: '10px 12px',
+      }}
+      onClick={(e) => { e.stopPropagation(); onClick?.(id); }}
+    >
+      <Handle type="target" position={Position.Top} style={{ background: 'var(--text-muted)', width: 6, height: 6, border: '2px solid var(--bg-root)' }} />
 
+      {/* Root cause tag */}
       {isRootCause && (
-        <span className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-rose-600 text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-lg">
-          <Flame className="w-3 h-3 animate-bounce" /> Root Cause
-        </span>
+        <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[9px] font-semibold z-10"
+          style={{ background: 'var(--health-crit)', color: 'white', fontFamily: 'var(--font-data)' }}>
+          root cause
+        </div>
       )}
 
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 mb-2.5">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className={`p-1.5 rounded-lg ${isRootCause ? 'bg-rose-500/20 text-rose-400' : isDb ? 'bg-purple-500/20 text-purple-400' : isGateway ? 'bg-sky-500/20 text-sky-400' : 'bg-slate-800 text-slate-300'}`}>
-            {isDb ? <Database className="w-4 h-4" /> : isGateway ? <Shield className="w-4 h-4" /> : <Server className="w-4 h-4" />}
+      {/* Chaos indicator */}
+      {chaosActive && !isRootCause && (
+        <div className="absolute -top-2.5 right-2 flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold z-10"
+          style={{ background: 'var(--health-warn)', color: 'var(--bg-root)', fontFamily: 'var(--font-data)' }}>
+          <Zap className="w-2.5 h-2.5" /> injected
+        </div>
+      )}
+
+      {/* Top row: icon + name + port */}
+      <div className="flex items-center gap-2 mb-2">
+        <div className="p-1 rounded" style={{ background: 'var(--bg-raised)' }}>
+          {isDb ? <Database className="w-3.5 h-3.5" style={{ color: 'var(--text-secondary)' }} /> :
+           isGateway ? <Shield className="w-3.5 h-3.5" style={{ color: 'var(--text-secondary)' }} /> :
+           <Server className="w-3.5 h-3.5" style={{ color: 'var(--text-secondary)' }} />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-semibold truncate" style={{ fontFamily: 'var(--font-ui)', color: 'var(--text-primary)' }}>
+            {display_name || id}
           </div>
-          <div className="min-w-0">
-            <h4 className="font-semibold text-xs text-white truncate tracking-tight">{display_name || id}</h4>
-            <span className="text-[10px] font-mono text-slate-400">:{host_port || 'internal'}</span>
+          <div className="text-[10px]" style={{ fontFamily: 'var(--font-data)', color: 'var(--text-muted)' }}>
+            :{host_port}
           </div>
         </div>
-
-        <span className={`text-[9px] font-mono font-bold uppercase px-1.5 py-0.5 rounded border ${badgeBg}`}>
-          {isRootCause ? 'FAILING' : role || 'SERVICE'}
-        </span>
+        <Waveform value={p99} healthy={isHealthy} />
       </div>
 
-      {/* Vitals Grid */}
-      <div className="grid grid-cols-2 gap-1.5 text-[11px] font-mono mb-2">
-        <div className="bg-slate-950/60 rounded px-2 py-1 border border-slate-800/80">
-          <span className="text-slate-500 text-[9px] block">RPS</span>
-          <span className="font-semibold text-slate-200">{rps.toFixed(1)}</span>
+      {/* Vitals row */}
+      <div className="flex gap-1.5" style={{ fontFamily: 'var(--font-data)', fontSize: '10px' }}>
+        <div className="flex-1 rounded px-1.5 py-1" style={{ background: 'var(--bg-raised)' }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: '8px' }}>rps</div>
+          <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{rps.toFixed(1)}</div>
         </div>
-
-        <div className={`rounded px-2 py-1 border ${p99 > 800 ? 'bg-rose-950/40 border-rose-500/40 text-rose-300' : p99 > 300 ? 'bg-amber-950/40 border-amber-500/40 text-amber-300' : 'bg-slate-950/60 border-slate-800/80 text-slate-200'}`}>
-          <span className="text-slate-500 text-[9px] block">p99 Latency</span>
-          <span className="font-semibold">{Math.round(p99)}ms</span>
+        <div className="flex-1 rounded px-1.5 py-1"
+          style={{ background: isCritical ? 'rgba(217,83,79,0.1)' : 'var(--bg-raised)' }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: '8px' }}>p99</div>
+          <div style={{ color: isCritical ? 'var(--health-crit)' : p99 > 300 ? 'var(--health-warn)' : 'var(--text-primary)', fontWeight: 500 }}>
+            {Math.round(p99)}ms
+          </div>
         </div>
+        {errorRate > 0 && (
+          <div className="flex-1 rounded px-1.5 py-1" style={{ background: 'rgba(217,83,79,0.1)' }}>
+            <div style={{ color: 'var(--text-muted)', fontSize: '8px' }}>err</div>
+            <div style={{ color: 'var(--health-crit)', fontWeight: 500 }}>{(errorRate * 100).toFixed(0)}%</div>
+          </div>
+        )}
       </div>
 
-      {/* Connection Pool Bar if instrumented */}
-      {poolMax !== null && poolMax > 0 && (
-        <div className="bg-slate-950/80 rounded p-1.5 border border-slate-800/80 mb-1.5">
-          <div className="flex justify-between text-[10px] font-mono text-slate-400 mb-1">
-            <span>Conn Pool</span>
-            <span className={poolActive >= poolMax ? 'text-rose-400 font-bold' : poolActive / poolMax > 0.7 ? 'text-amber-400' : 'text-slate-300'}>
-              {poolActive}/{poolMax} ({Math.round(poolSaturation * 100)}%)
+      {/* Pool bar */}
+      {poolMax != null && poolMax > 0 && (
+        <div className="mt-1.5">
+          <div className="flex justify-between" style={{ fontFamily: 'var(--font-data)', fontSize: '9px', color: 'var(--text-muted)' }}>
+            <span>pool</span>
+            <span style={{ color: poolActive >= poolMax ? 'var(--health-crit)' : 'var(--text-secondary)' }}>
+              {poolActive}/{poolMax}
             </span>
           </div>
-          <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden flex">
+          <div className="w-full h-1 rounded-full mt-0.5" style={{ background: 'var(--bg-raised)' }}>
             <div
-              className={`h-full transition-all duration-300 ${poolActive >= poolMax ? 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)]' : poolActive / poolMax > 0.7 ? 'bg-amber-400' : 'bg-emerald-400'}`}
-              style={{ width: `${Math.min(100, poolSaturation * 100)}%` }}
+              className="h-full rounded-full transition-all duration-300"
+              style={{
+                width: `${Math.min(100, (poolActive / poolMax) * 100)}%`,
+                background: poolActive >= poolMax ? 'var(--health-crit)' : (poolActive / poolMax) > 0.7 ? 'var(--health-warn)' : 'var(--health-ok)',
+              }}
             />
           </div>
         </div>
       )}
 
-      {/* Retries or Errors if spiking */}
-      {(retries > 0 || errorRate > 0) && (
-        <div className="flex items-center justify-between text-[10px] font-mono pt-1 border-t border-slate-800/80 text-amber-400">
-          {retries > 0 && <span>Retries: {retries.toFixed(1)}/s</span>}
-          {errorRate > 0 && <span className="text-rose-400">Err: {(errorRate * 100).toFixed(1)}%</span>}
-        </div>
-      )}
-
-      <Handle type="source" position={Position.Bottom} className="!bg-sky-400" />
+      <Handle type="source" position={Position.Bottom} style={{ background: 'var(--text-muted)', width: 6, height: 6, border: '2px solid var(--bg-root)' }} />
     </div>
   );
 }

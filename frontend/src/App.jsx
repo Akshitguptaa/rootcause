@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ReactFlow,
   Background,
@@ -9,14 +9,15 @@ import {
 } from '@xyflow/react';
 
 import ServiceNode from './components/ServiceNode';
+import CausalEdge from './components/CausalEdge';
 import AgentTerminal from './components/AgentTerminal';
-import DiagnosisCard from './components/DiagnosisCard';
+import DiagnosisDrawer from './components/DiagnosisDrawer';
+import ChaosChipBar from './components/ChaosChipBar';
+import InspectPanel from './components/InspectPanel';
 import Header from './components/Header';
-import { Activity, Database, Flame, Server, Sparkles } from 'lucide-react';
 
-const nodeTypes = {
-  serviceNode: ServiceNode,
-};
+const nodeTypes = { serviceNode: ServiceNode };
+const edgeTypes = { causal: CausalEdge };
 
 const DEFAULT_COMPOSE = `version: "3.8"
 services:
@@ -36,24 +37,51 @@ services:
     ports: ["8084:8084"]
 `;
 
+const SERVICE_PORTS = {
+  gateway: 8080,
+  orders: 8081,
+  inventory: 8082,
+  payment: 8083,
+  'db-service': 8084,
+};
+
+const POSITIONS = {
+  gateway: { x: 380, y: 50 },
+  orders: { x: 380, y: 230 },
+  inventory: { x: 160, y: 420 },
+  payment: { x: 600, y: 420 },
+  'db-service': { x: 380, y: 600 },
+};
+
 export default function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [topology, setTopology] = useState(null);
 
-  const [mode, setMode] = useState('live'); // 'live', 'sim_cascade', 'sim_retry'
+  const [mode, setMode] = useState('live');
   const [concurrency, setConcurrency] = useState(35);
   const [duration, setDuration] = useState(8);
 
   const [isRunning, setIsRunning] = useState(false);
   const [thoughts, setThoughts] = useState('');
   const [report, setReport] = useState(null);
-  const [highlightedService, setHighlightedService] = useState(null);
+  const [showDrawer, setShowDrawer] = useState(false);
   const [currentMetrics, setCurrentMetrics] = useState({});
+  const [metricsHistory, setMetricsHistory] = useState({});
 
-  const socketRef = React.useRef(null);
+  const [panelWidth, setPanelWidth] = useState(380);
 
-  // 1. Initial Topology Load from FastAPI backend
+  const [chaosInjections, setChaosInjections] = useState({});
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+
+  const [causalPath, setCausalPath] = useState([]);
+  const [rootCauseId, setRootCauseId] = useState(null);
+  const [blastRadiusIds, setBlastRadiusIds] = useState([]);
+
+  const socketRef = useRef(null);
+  const metricsRef = useRef({});
+
+  // ── Load topology ──
   const loadTopology = useCallback(async () => {
     try {
       const res = await fetch('/api/topology/parse', {
@@ -64,36 +92,26 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setTopology(data);
-        layoutGraph(data, {}, null, []);
       }
     } catch (e) {
-      console.error('Failed to parse topology:', e);
+      console.error('Topology load failed:', e);
     }
   }, []);
 
-  useEffect(() => {
-    loadTopology();
-  }, [loadTopology]);
+  useEffect(() => { loadTopology(); }, [loadTopology]);
 
-  // 2. Compute visual tree layout for nodes & edges
-  const layoutGraph = (graph, metricsMap = {}, rootCauseId = null, blastRadiusIds = []) => {
-    if (!graph || !graph.nodes) return;
+  // ── Build graph ──
+  const buildGraph = useCallback(() => {
+    if (!topology?.nodes) return;
 
-    // Hardwired clean tree coordinates for the 5 services
-    const positions = {
-      gateway: { x: 320, y: 30 },
-      orders: { x: 320, y: 190 },
-      inventory: { x: 130, y: 360 },
-      payment: { x: 510, y: 360 },
-      'db-service': { x: 320, y: 530 },
-    };
+    const causalPairs = [];
+    for (let i = 0; i < causalPath.length - 1; i++) {
+      causalPairs.push([causalPath[i], causalPath[i + 1]]);
+    }
 
-    const flowNodes = graph.nodes.map((n, i) => {
-      const pos = positions[n.id] || { x: 100 + i * 180, y: 100 + (i % 3) * 150 };
-      const m = metricsMap[n.id] || {};
-      const isRoot = rootCauseId === n.id;
-      const isBlast = blastRadiusIds.includes(n.id);
-
+    const flowNodes = topology.nodes.map((n, i) => {
+      const pos = POSITIONS[n.id] || { x: 100 + i * 180, y: 100 };
+      const m = metricsRef.current[n.id] || {};
       return {
         id: n.id,
         type: 'serviceNode',
@@ -104,76 +122,129 @@ export default function App() {
           role: n.role,
           host_port: n.host_port,
           metrics: m,
-          isRootCause: isRoot,
-          isBlastRadius: isBlast,
+          isRootCause: rootCauseId === n.id,
+          isBlastRadius: blastRadiusIds.includes(n.id),
+          isCausalPath: causalPairs.some(([s, t]) => s === n.id || t === n.id),
+          isSelected: selectedNodeId === n.id,
+          chaosActive: chaosInjections[n.id] || null,
+          onClick: (nodeId) => setSelectedNodeId((prev) => prev === nodeId ? null : nodeId),
         },
       };
     });
 
-    const flowEdges = graph.edges.map((e, idx) => {
-      const isStressed =
-        metricsMap[e.target]?.latency_p99_ms > 400 ||
-        metricsMap[e.target]?.pool_active >= (metricsMap[e.target]?.pool_max || 999);
+    const flowEdges = topology.edges.map((e, idx) => {
+      const tm = metricsRef.current[e.target] || {};
+      const isStressed = (tm.latency_p99_ms ?? 0) > 400 || (tm.pool_active ?? 0) >= (tm.pool_max ?? 999);
+      const isCausal = causalPairs.some(([s, t]) => s === e.source && t === e.target);
+      const isRoot = rootCauseId === e.target;
 
-      let strokeColor = '#38bdf8'; // sky cyan normal
-      if (rootCauseId === e.target) strokeColor = '#f43f5e'; // rose red
-      else if (isStressed) strokeColor = '#f59e0b'; // amber
+      let strokeColor = '#2a2a2a';
+      if (isCausal) strokeColor = '#7c6ef0';
+      else if (isRoot) strokeColor = '#d9534f';
+      else if (isStressed) strokeColor = '#e5a63e';
 
       return {
         id: `e-${e.source}-${e.target}-${idx}`,
         source: e.source,
         target: e.target,
-        animated: true,
-        style: { stroke: strokeColor, strokeWidth: isStressed ? 2.5 : 1.8 },
+        type: 'causal',
+        animated: isCausal,
+        data: { isCausal, isStressed, isRootCause: isRoot },
+        style: { stroke: strokeColor, strokeWidth: isCausal ? 2.5 : isStressed ? 1.8 : 1.2 },
         markerEnd: {
           type: MarkerType.ArrowClosed,
           color: strokeColor,
-          width: 16,
-          height: 16,
+          width: 12,
+          height: 12,
         },
       };
     });
 
     setNodes(flowNodes);
     setEdges(flowEdges);
-  };
+  }, [topology, selectedNodeId, chaosInjections, rootCauseId, blastRadiusIds, causalPath]);
 
-  // 3. Start Experiment via WebSocket
+  useEffect(() => { buildGraph(); }, [buildGraph]);
+
+  // ── Chaos injection via proxy ──
+  const handleInject = useCallback(async (serviceId, injectType) => {
+    const port = SERVICE_PORTS[serviceId];
+    if (!port) return;
+
+    try {
+      const res = await fetch(`/chaos/${port}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(injectType.chaos),
+      });
+      if (res.ok) {
+        setChaosInjections((prev) => ({ ...prev, [serviceId]: injectType.chaos }));
+      }
+    } catch (e) {
+      console.error(`Chaos inject failed on ${serviceId}:`, e);
+    }
+  }, []);
+
+  const clearAllChaos = useCallback(async () => {
+    const promises = Object.keys(chaosInjections).map(async (svcId) => {
+      const port = SERVICE_PORTS[svcId];
+      if (port) {
+        try { await fetch(`/chaos/${port}`, { method: 'DELETE' }); } catch (e) { /* ignore */ }
+      }
+    });
+    await Promise.all(promises);
+    setChaosInjections({});
+  }, [chaosInjections]);
+
+  // ── Metrics history ──
+  useEffect(() => {
+    if (Object.keys(currentMetrics).length > 0) {
+      setMetricsHistory((prev) => {
+        const next = { ...prev };
+        for (const [svcId, snap] of Object.entries(currentMetrics)) {
+          next[svcId] = [...(next[svcId] || []).slice(-14), snap];
+        }
+        return next;
+      });
+    }
+  }, [currentMetrics]);
+
+  // ── WebSocket experiment ──
   const startExperiment = () => {
     if (!topology) return;
 
     setIsRunning(true);
     setThoughts('');
     setReport(null);
-    setHighlightedService(null);
+    setShowDrawer(false);
+    setRootCauseId(null);
+    setBlastRadiusIds([]);
+    setCausalPath([]);
+    metricsRef.current = {};
+    setMetricsHistory({});
 
     const wsHost = window.location.port === '5173' ? `${window.location.hostname}:8000` : window.location.host;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${wsHost}/api/ws/experiment`;
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(`${protocol}//${wsHost}/api/ws/experiment`);
     socketRef.current = ws;
 
     ws.onopen = () => {
-      const plan = {
-        name: 'Live Target Services Stress Test',
-        target_url: 'http://localhost:8080',
-        http_endpoint: '/order',
-        concurrency_users: concurrency,
-        duration_seconds: duration,
-        stress_pattern: 'SPIKE',
-      };
-
       let simScenario = null;
       if (mode === 'sim_cascade') simScenario = 'CASCADING_FAILURE';
       if (mode === 'sim_retry') simScenario = 'RETRY_STORM';
 
-      ws.send(
-        JSON.stringify({
-          topology: topology,
-          plan: plan,
-          simulation_scenario: simScenario,
-        })
-      );
+      ws.send(JSON.stringify({
+        topology,
+        plan: {
+          name: 'Stress Test',
+          target_url: 'http://localhost:8080',
+          http_endpoint: '/order',
+          concurrency_users: concurrency,
+          duration_seconds: duration,
+          stress_pattern: 'SPIKE',
+        },
+        simulation_scenario: simScenario,
+      }));
     };
 
     ws.onmessage = (event) => {
@@ -183,126 +254,199 @@ export default function App() {
 
         if (event_type === 'METRICS_TICK') {
           const snaps = data.snapshots || {};
-          setCurrentMetrics(snaps);
-          layoutGraph(topology, snaps, null, []);
+          metricsRef.current = snaps;
+          setCurrentMetrics({ ...snaps });
         } else if (event_type === 'REASONING_CHUNK') {
           setThoughts((prev) => prev + (data.token || ''));
         } else if (event_type === 'DIAGNOSIS_REPORT') {
-          setReport(data);
           const root = data.root_cause_service;
           const blast = data.blast_radius || [];
-          layoutGraph(topology, currentMetrics, root, blast);
+          setReport(data);
+          setRootCauseId(root);
+          setBlastRadiusIds(blast);
+          setShowDrawer(true);
+          computeCausalPath(root, blast);
         } else if (event_type === 'COMPLETED') {
           setIsRunning(false);
           ws.close();
         }
       } catch (err) {
-        console.error('Error processing WS frame:', err);
+        console.error('WS error:', err);
       }
     };
 
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
-      setIsRunning(false);
-    };
-
-    ws.onclose = () => {
-      setIsRunning(false);
-    };
+    ws.onerror = () => setIsRunning(false);
+    ws.onclose = () => setIsRunning(false);
   };
 
   const stopExperiment = () => {
-    if (socketRef.current) {
-      socketRef.current.close();
-    }
+    socketRef.current?.close();
     setIsRunning(false);
   };
 
-  // 4. Highlight specific service when clicking blast radius chip
-  const handleHighlight = (serviceId) => {
-    setHighlightedService(serviceId);
-    setNodes((prev) =>
-      prev.map((n) => ({
-        ...n,
-        data: {
-          ...n.data,
-          status: n.id === serviceId ? 'critical' : n.data.status,
-        },
-      }))
-    );
+  const computeCausalPath = (rootId, blastIds) => {
+    if (!topology || !rootId) return;
+    const reverseAdj = {};
+    for (const edge of topology.edges) {
+      if (!reverseAdj[edge.target]) reverseAdj[edge.target] = [];
+      reverseAdj[edge.target].push(edge.source);
+    }
+    const path = [rootId];
+    const visited = new Set([rootId]);
+    let current = rootId;
+    while (reverseAdj[current]) {
+      const ups = reverseAdj[current].filter((u) => !visited.has(u));
+      if (!ups.length) break;
+      const next = ups.find((u) => blastIds.includes(u)) || ups[0];
+      path.push(next);
+      visited.add(next);
+      current = next;
+    }
+    setCausalPath(path.reverse());
   };
 
-  const dbSnap = currentMetrics['db-service'] || {};
-  const gwSnap = currentMetrics['gateway'] || {};
+  // ── Panel Resizing ──
+  const startDrag = useCallback((e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = panelWidth;
+
+    const onMouseMove = (moveEvent) => {
+      const delta = startX - moveEvent.clientX;
+      const newWidth = Math.max(250, Math.min(800, startWidth + delta));
+      setPanelWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, [panelWidth]);
+
+  // ── Selected node for inspect panel ──
+  const selectedNodeData = selectedNodeId && topology
+    ? (() => {
+        const n = topology.nodes.find((nd) => nd.id === selectedNodeId);
+        if (!n) return null;
+        return {
+          id: n.id,
+          display_name: n.display_name || n.id,
+          role: n.role,
+          host_port: n.host_port,
+          metrics: currentMetrics[n.id] || metricsRef.current[n.id] || {},
+        };
+      })()
+    : null;
 
   return (
-    <div className="w-screen h-screen flex flex-col bg-[#07090e] text-slate-200 overflow-hidden select-none">
+    <div className="w-screen h-screen flex flex-col overflow-hidden select-none"
+      style={{ background: 'var(--bg-root)', color: 'var(--text-primary)' }}>
+
       <Header
         isRunning={isRunning}
         onStart={startExperiment}
         onStop={stopExperiment}
-        mode={mode}
-        setMode={setMode}
-        concurrency={concurrency}
-        setConcurrency={setConcurrency}
-        duration={duration}
-        setDuration={setDuration}
-      />
+        mode={mode} setMode={setMode}
+        concurrency={concurrency} setConcurrency={setConcurrency}
+        duration={duration} setDuration={setDuration}
+      >
+        <ChaosChipBar
+          selectedNode={selectedNodeId}
+          onInject={handleInject}
+          onClearAll={clearAllChaos}
+          activeChaos={chaosInjections}
+        />
+      </Header>
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Column: Interactive Topology Canvas (65%) */}
-        <div className="flex-1 relative border-r border-slate-800/80">
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Graph canvas */}
+        <div className="flex-1 relative">
           <ReactFlow
             nodes={nodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             fitView
-            fitViewOptions={{ padding: 0.2 }}
-            minZoom={0.5}
+            fitViewOptions={{ padding: 0.3 }}
+            minZoom={0.4}
             maxZoom={1.5}
+            onPaneClick={() => setSelectedNodeId(null)}
+            proOptions={{ hideAttribution: true }}
           >
-            <Background color="#1e293b" gap={20} size={1} />
-            <Controls className="!bg-slate-900 !border-slate-800 !fill-slate-400 !rounded-xl overflow-hidden shadow-xl" />
+            <Background color="#222222" gap={28} size={1} variant="dots" />
+            <Controls position="top-left" showInteractive={false} />
           </ReactFlow>
 
-          {/* Quick Metrics Overlay (Bottom Left) */}
-          <div className="absolute bottom-5 left-5 flex items-center gap-2 bg-slate-950/80 border border-slate-800/80 rounded-xl p-2.5 backdrop-blur-xl font-mono text-xs shadow-xl pointer-events-none">
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-900 border border-slate-800">
-              <span className="w-2 h-2 rounded-full bg-sky-400" />
-              <span className="text-slate-400">Gateway:</span>
-              <span className="font-bold text-white">{(gwSnap.throughput_rps || 0).toFixed(1)} RPS</span>
-            </div>
-
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-900 border border-slate-800">
-              <span className={`w-2 h-2 rounded-full ${dbSnap.pool_active >= 5 ? 'bg-rose-500 animate-ping' : 'bg-emerald-400'}`} />
-              <span className="text-slate-400">DB Pool:</span>
-              <span className={`font-bold ${dbSnap.pool_active >= 5 ? 'text-rose-400' : 'text-white'}`}>
-                {dbSnap.pool_active ?? 0}/5
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-900 border border-slate-800">
-              <span className="text-slate-400">p99:</span>
-              <span className={`font-bold ${gwSnap.latency_p99_ms > 800 ? 'text-rose-400' : 'text-white'}`}>
-                {Math.round(gwSnap.latency_p99_ms || 0)}ms
-              </span>
-            </div>
+          {/* Top-right status */}
+          <div className="absolute top-4 right-4 flex items-center gap-2 z-10 pointer-events-none"
+            style={{ fontFamily: 'var(--font-data)', fontSize: '11px' }}>
+            {(() => {
+              const gw = currentMetrics.gateway || {};
+              const db = currentMetrics['db-service'] || {};
+              return (
+                <>
+                  <span className="px-2 py-0.5 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>rps </span>
+                    <span style={{ fontWeight: 600 }}>{(gw.throughput_rps || 0).toFixed(0)}</span>
+                  </span>
+                  <span className="px-2 py-0.5 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>pool </span>
+                    <span style={{ fontWeight: 600, color: (db.pool_active ?? 0) >= 5 ? 'var(--health-crit)' : 'var(--text-primary)' }}>
+                      {db.pool_active ?? 0}/{db.pool_max ?? 5}
+                    </span>
+                  </span>
+                  <span className="px-2 py-0.5 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>p99 </span>
+                    <span style={{ fontWeight: 600, color: (gw.latency_p99_ms ?? 0) > 800 ? 'var(--health-crit)' : 'var(--text-primary)' }}>
+                      {Math.round(gw.latency_p99_ms || 0)}ms
+                    </span>
+                  </span>
+                </>
+              );
+            })()}
           </div>
         </div>
 
-        {/* Right Column: Reasoning Terminal & Diagnosis (35%) */}
-        <div className="w-[480px] h-full flex flex-col p-4 bg-[#090d16] overflow-y-auto space-y-4">
-          <div className="h-[380px] shrink-0">
-            <AgentTerminal thoughts={thoughts} isRunning={isRunning} completed={Boolean(report)} />
+        {/* Right panel: inspect or terminal */}
+        <div style={{ width: panelWidth, borderLeft: '1px solid var(--border-subtle)', background: 'var(--bg-surface)' }}
+          className="h-full flex flex-col relative transition-none">
+          
+          {/* Resize handle */}
+          <div
+            onMouseDown={startDrag}
+            className="absolute top-0 bottom-0 -left-1 w-2 cursor-col-resize z-50 group"
+          >
+            <div className="w-0.5 h-full mx-auto bg-transparent group-hover:bg-[#5e5a56] transition-colors" />
           </div>
 
-          <div className="flex-1">
-            <DiagnosisCard report={report} onHighlightService={handleHighlight} />
-          </div>
+          {selectedNodeId && selectedNodeData ? (
+            <InspectPanel
+              node={selectedNodeData}
+              metricsHistory={metricsHistory}
+              chaosState={chaosInjections[selectedNodeId] || null}
+              onClose={() => setSelectedNodeId(null)}
+            />
+          ) : (
+            <div className="flex-1 p-3 overflow-hidden">
+              <AgentTerminal thoughts={thoughts} isRunning={isRunning} completed={Boolean(report)} />
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Diagnosis drawer */}
+      {showDrawer && report && (
+        <DiagnosisDrawer
+          report={report}
+          onHighlightService={(svcId) => setSelectedNodeId(svcId)}
+          onDismiss={() => setShowDrawer(false)}
+        />
+      )}
     </div>
   );
 }

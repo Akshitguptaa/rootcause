@@ -1,67 +1,131 @@
 @import "tailwindcss";
 @import "@xyflow/react/dist/style.css";
 
+/*
+ * rootcause — design tokens
+ *
+ * Functional palette: teal/amber/red for health states.
+ * Agent-blue (#4f8cc9) reserved ONLY for "agent is reasoning".
+ * Background is true near-black, not blue-tinted.
+ * No neon. No gradient borders. No glow-pulse.
+ */
+
 :root {
   color-scheme: dark;
+
+  /* Surface */
+  --bg-root: #111111;
+  --bg-surface: #191919;
+  --bg-raised: #222222;
+  --border-subtle: #2a2a2a;
+  --border-medium: #363636;
+
+  /* Text */
+  --text-primary: #e8e4df;
+  --text-secondary: #9a9590;
+  --text-muted: #5e5a56;
+
+  /* Functional colors — these mean something */
+  --health-ok: #2dd4a8;       /* teal — healthy */
+  --health-warn: #e5a63e;     /* amber — degraded */
+  --health-crit: #d9534f;     /* red — failing */
+  --agent-blue: #4f8cc9;      /* blue — ONLY for agent reasoning */
+  --causal-indigo: #7c6ef0;   /* indigo — causal path trace */
+
+  /* Fonts */
+  --font-brand: 'Fraunces', Georgia, serif;
+  --font-ui: 'Space Grotesk', system-ui, sans-serif;
+  --font-data: 'IBM Plex Mono', 'Menlo', monospace;
 }
+
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
   padding: 0;
-  background-color: #07090e;
-  color: #e2e8f0;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background-color: var(--bg-root);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
-#root {
-  width: 100vw;
-  height: 100vh;
+#root { width: 100vw; height: 100vh; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-medium); border-radius: 2px; }
+
+/* ── Causal path trace — animated dashes ── */
+@keyframes causal-march {
+  to { stroke-dashoffset: -20; }
+}
+.causal-edge-path {
+  stroke-dasharray: 10 5;
+  animation: causal-march 0.8s linear infinite;
 }
 
-/* Custom Scrollbars */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+/* ── Drawer entrance ── */
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
 }
-::-webkit-scrollbar-track {
-  background: #0b0f19;
-}
-::-webkit-scrollbar-thumb {
-  background: #1e293b;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #334155;
-}
+.slide-up { animation: slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 
-/* Custom animations */
-@keyframes pulse-slow {
-  0%, 100% { opacity: 0.3; transform: scale(1); }
-  50% { opacity: 0.8; transform: scale(1.03); }
+@keyframes slide-down {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
 }
+.slide-down { animation: slide-down 0.25s ease-in forwards; }
 
-.animate-pulse-slow {
-  animation: pulse-slow 3s infinite ease-in-out;
+/* ── Panel slide ── */
+@keyframes panel-in {
+  from { transform: translateX(100%); opacity: 0.5; }
+  to { transform: translateX(0); opacity: 1; }
 }
+.panel-slide-in { animation: panel-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 
-@keyframes ping-slow {
-  0% { transform: scale(1); opacity: 0.8; }
-  80%, 100% { transform: scale(1.8); opacity: 0; }
+/* ── Subtle fade ── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
+.fade-in { animation: fade-in 0.25s ease-out; }
 
-.animate-ping-slow {
-  animation: ping-slow 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+/* ── Node sick shake ── */
+@keyframes sick-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  75% { transform: translateX(2px); }
 }
+.node-sick { animation: sick-shake 0.3s ease-in-out; }
 
-/* React Flow custom overrides */
-.react-flow__attribution {
-  display: none !important;
-}
-
+/* ── React Flow overrides ── */
+.react-flow__attribution { display: none !important; }
 .react-flow__handle {
-  background: #38bdf8 !important;
-  width: 8px !important;
-  height: 8px !important;
-  border: 2px solid #0f172a !important;
+  background: var(--text-muted) !important;
+  width: 6px !important;
+  height: 6px !important;
+  border: 2px solid var(--bg-root) !important;
+}
+.react-flow__background { opacity: 0.25; }
+.react-flow__controls {
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+}
+.react-flow__controls-button {
+  background: var(--bg-raised) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+  fill: var(--text-secondary) !important;
+}
+.react-flow__controls-button:hover {
+  background: var(--border-medium) !important;
+}
+
+/* ── Active injection indicator on node ── */
+.inject-active {
+  outline: 2px solid var(--health-warn);
+  outline-offset: 3px;
 }
