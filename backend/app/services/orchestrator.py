@@ -2,6 +2,7 @@ from __future__ import annotations
 import time
 import asyncio
 import logging
+import httpx
 from typing import AsyncGenerator, Optional, Dict
 
 from ..models.topology import TopologyGraph
@@ -18,6 +19,8 @@ from .chaos_drivers import (
 )
 from .diagnosis_engine import DiagnosisEngine
 
+from .adapter import TelemetryAdapter
+
 logger = logging.getLogger("rootcause.orchestrator")
 
 
@@ -30,8 +33,9 @@ class ExperimentOrchestrator:
     4. Triggers live LLM reasoning stream and final diagnosis.
     """
 
-    def __init__(self, diagnosis_engine: Optional[DiagnosisEngine] = None):
+    def __init__(self, diagnosis_engine: Optional[DiagnosisEngine] = None, telemetry_adapter: Optional[TelemetryAdapter] = None):
         self.engine = diagnosis_engine or DiagnosisEngine()
+        self.adapter = telemetry_adapter or TelemetryAdapter()
 
     async def run_experiment_stream(
         self,
@@ -105,11 +109,23 @@ class ExperimentOrchestrator:
                 if simulation_scenario:
                     latest_snapshots = SimulationScenarioGenerator.get_tick_snapshots(simulation_scenario, second)
                 else:
-                    # In live mode, entrypoint metrics come from the stress driver
-                    live_stats = stress_driver.get_live_metrics() if stress_driver else {}
-                    ingress_id = topology.entrypoint_ids[0] if topology.entrypoint_ids else "api-gateway"
-                    latest_snapshots = {
-                        ingress_id: CanonicalMetricSnapshot(
+                    # In live mode: query /_metrics from all reachable services in topology
+                    snapshots = {}
+                    async with httpx.AsyncClient(timeout=1.5) as client:
+                        for node in topology.nodes:
+                            try:
+                                r = await client.get(f"{node.base_url}/_metrics")
+                                if r.status_code == 200:
+                                    raw = r.json()
+                                    snapshots[node.id] = self.adapter.ingest(raw)
+                            except Exception:
+                                pass
+
+                    # Fallback for entrypoint if /_metrics wasn't reached
+                    ingress_id = topology.entrypoint_ids[0] if topology.entrypoint_ids else "gateway"
+                    if ingress_id not in snapshots and stress_driver:
+                        live_stats = stress_driver.get_live_metrics()
+                        snapshots[ingress_id] = CanonicalMetricSnapshot(
                             service_id=ingress_id,
                             timestamp=now,
                             throughput_rps=live_stats.get("rps", 0.0),
@@ -117,7 +133,7 @@ class ExperimentOrchestrator:
                             latency_p99_ms=live_stats.get("p99_ms", 0.0),
                             error_rate=live_stats.get("error_rate", 0.0),
                         )
-                    }
+                    latest_snapshots = snapshots
 
                 # Emit metrics tick for live dashboard
                 serialized_snapshots = {k: v.model_dump() for k, v in latest_snapshots.items()}

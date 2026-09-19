@@ -3,5 +3,8 @@
   "private": true,
   "dependencies": {
     "express": "^4.21.0"
+  },
+  "scripts": {
+    "start": "node start.js"
   }
 }
