@@ -1,0 +1,7 @@
+{
+  "name": "target-services",
+  "private": true,
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}
