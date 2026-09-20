@@ -46,7 +46,7 @@ class GroqProvider(BaseLLMProvider):
             ],
             stream=True,
             temperature=0.1,
-            max_tokens=2048,
+            max_tokens=3000,
         )
         async for chunk in response:
             content = chunk.choices[0].delta.content
@@ -61,21 +61,17 @@ class GroqProvider(BaseLLMProvider):
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.1,
-            max_tokens=2048,
+            max_tokens=3000,
         )
         return response.choices[0].message.content or ""
 
 
 class BedrockProvider(BaseLLMProvider):
-    """
-    AWS Bedrock implementation for final cloud submission.
-    Uses Anthropic Claude 3.5 Sonnet on Amazon Bedrock.
-    """
 
     def __init__(
         self,
         region_name: Optional[str] = None,
-        model_id: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+        model_id: str = "anthropic.claude-sonnet-4-20250514-v1:0"
     ):
         self.region_name = region_name or os.getenv("AWS_REGION", "us-east-1")
         self.model_id = os.getenv("BEDROCK_MODEL_ID", model_id)
@@ -83,30 +79,23 @@ class BedrockProvider(BaseLLMProvider):
         self.client = boto3.client("bedrock-runtime", region_name=self.region_name)
 
     async def stream_reasoning(self, system_prompt: str, user_prompt: str) -> AsyncGenerator[str, None]:
-        payload = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 2048,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_prompt}],
-            "temperature": 0.1
-        }
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: self.client.invoke_model_with_response_stream(
+            lambda: self.client.converse_stream(
                 modelId=self.model_id,
-                body=json.dumps(payload),
-                contentType="application/json"
+                system=[{"text": system_prompt}],
+                messages=[{"role": "user", "content": [{"text": user_prompt}]}],
+                inferenceConfig={"temperature": 0.1, "maxTokens": 4096},
             )
         )
-        stream = response.get("body")
+        stream = response.get("stream")
         if stream:
             for event in stream:
-                chunk = event.get("chunk")
-                if chunk:
-                    data = json.loads(chunk.get("bytes").decode())
-                    if data.get("type") == "content_block_delta":
-                        yield data.get("delta", {}).get("text", "")
+                if "contentBlockDelta" in event:
+                    text = event["contentBlockDelta"]["delta"].get("text", "")
+                    if text:
+                        yield text
 
     async def generate_response(self, system_prompt: str, user_prompt: str) -> str:
         collected = []

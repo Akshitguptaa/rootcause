@@ -282,6 +282,9 @@ export default function App() {
           setBlastRadiusIds(blast);
           setShowDrawer(true);
           computeCausalPath(root, blast);
+        } else if (event_type === 'ERROR') {
+          console.error('Experiment error:', data.error);
+          setThoughts((prev) => prev + `\n[ERROR] ${data.error}\n`);
         } else if (event_type === 'COMPLETED') {
           setIsRunning(false);
           ws.close();
